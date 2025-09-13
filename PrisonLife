@@ -22,11 +22,13 @@ local Window = Library:CreateWindow({
 local Tabs = {
     Info = Window:AddTab("Information", "info"),
     Main = Window:AddTab("Main", "user"),
+    Weapons = Window:AddTab("Weapon", "shield-user"),
     ["UI Settings"] = Window:AddTab("UI Settings", "settings"),
 }
 
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Movement", "person-standing")
 local RightGroupBox = Tabs.Main:AddRightGroupbox("MISC", "plus")
+local Groupbox = Tabs.Weapons:AddLeftGroupbox("AimBot", "crosshair")
 local Status = Tabs.Info:AddLeftGroupbox("Status", "chart-bar")
 
 local Players = game:GetService("Players")
@@ -707,6 +709,269 @@ RightGroupBox:AddToggle("LowGraphicsToggle", {
             end
         end
     end,
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+-- Aimbot settings (default values)
+local aimbotSettings = {
+    enabled = false,
+    fovRadius = 100,
+    smoothness = 0.3,
+    targetPart = "Head",
+    teamCheck = true,
+    predictionEnabled = true,
+    predictionMultiplier = 0.15,
+    visibleCheck = true,
+    randomOffset = true,
+    maxDistance = 1000,
+}
+
+-- Visibility raycast function
+local function isVisible(targetPart)
+    local origin = Camera.CFrame.Position
+    local direction = (targetPart.Position - origin).Unit * 500
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    local result = workspace:Raycast(origin, direction, raycastParams)
+    if not result then
+        return true
+    elseif result.Instance == targetPart or result.Instance:IsDescendantOf(targetPart.Parent) then
+        return true
+    else
+        return false
+    end
+end
+
+-- Check if player is enemy (based on team)
+local function isEnemy(player)
+    if not player.Team or not LocalPlayer.Team then return true end
+    return player.Team ~= LocalPlayer.Team
+end
+
+-- Check if point is inside FOV circle on screen
+local function isInFOV(screenPos, radius)
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    return (screenPos - center).Magnitude <= radius
+end
+
+-- Get predicted target position based on velocity
+local function getPredictedPosition(targetPart)
+    if aimbotSettings.predictionEnabled then
+        local vel = targetPart.Velocity
+        return targetPart.Position + (vel * aimbotSettings.predictionMultiplier)
+    else
+        return targetPart.Position
+    end
+end
+
+-- Find the best target player to aim at
+local function getClosestTarget()
+    local closestPlayer = nil
+    local closestDistance = math.huge
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(aimbotSettings.targetPart) then
+            if not aimbotSettings.teamCheck or isEnemy(player) then
+                local targetPart = player.Character[aimbotSettings.targetPart]
+
+                if aimbotSettings.visibleCheck and not isVisible(targetPart) then
+                    goto continue
+                end
+
+                local screenPos, onScreen = Camera:WorldToViewportPoint(getPredictedPosition(targetPart))
+                if onScreen and isInFOV(Vector2.new(screenPos.X, screenPos.Y), aimbotSettings.fovRadius) then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)).Magnitude
+                    if dist < closestDistance and (targetPart.Position - Camera.CFrame.Position).Magnitude <= aimbotSettings.maxDistance then
+                        closestDistance = dist
+                        closestPlayer = player
+                    end
+                end
+            end
+        end
+        ::continue::
+    end
+
+    return closestPlayer
+end
+
+-- Smoothly aim the camera toward the target position
+local function smoothAim(targetPos)
+    local cameraPos = Camera.CFrame.Position
+    local direction = (targetPos - cameraPos).Unit
+    local newLookVector = Camera.CFrame.LookVector:Lerp(direction, aimbotSettings.smoothness)
+    Camera.CFrame = CFrame.new(cameraPos, cameraPos + newLookVector)
+end
+
+-- Main aimbot render loop
+local connection
+
+local function startAimbot()
+    if connection then return end
+    connection = RunService.RenderStepped:Connect(function()
+        if not aimbotSettings.enabled then return end
+
+        local target = getClosestTarget()
+        if target and target.Character and target.Character:FindFirstChild(aimbotSettings.targetPart) then
+            local predictedPos = getPredictedPosition(target.Character[aimbotSettings.targetPart])
+
+            if aimbotSettings.randomOffset then
+                local offset = Vector3.new(
+                    (math.random() - 0.5) * 0.1,
+                    (math.random() - 0.5) * 0.1,
+                    (math.random() - 0.5) * 0.1
+                )
+                predictedPos = predictedPos + offset
+            end
+
+            smoothAim(predictedPos)
+        end
+    end)
+end
+
+local function stopAimbot()
+    if connection then
+        connection:Disconnect()
+        connection = nil
+    end
+end
+
+local function toggleAimbot(state)
+    aimbotSettings.enabled = state
+    if state then
+        startAimbot()
+    else
+        stopAimbot()
+    end
+end
+
+-- FOV Circle drawing
+local Drawing = Drawing -- exploit drawing API assumed to exist
+local fovCircle = Drawing.new("Circle")
+fovCircle.Radius = aimbotSettings.fovRadius
+fovCircle.Color = Color3.fromRGB(255, 0, 0)
+fovCircle.Thickness = 2
+fovCircle.Filled = false
+fovCircle.Visible = false
+
+RunService.RenderStepped:Connect(function()
+    if aimbotSettings.enabled then
+        local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        fovCircle.Position = center
+        fovCircle.Visible = true
+    else
+        fovCircle.Visible = false
+    end
+end)
+
+-- ================================
+-- UI Integration with your Groupbox
+-- ================================
+
+Groupbox:AddToggle("EnableAimbotToggle", {
+    Text = "Enable Aimbot",
+    Default = false,
+    Tooltip = "Toggle the aimbot ON or OFF",
+    Callback = function(state)
+        toggleAimbot(state)
+    end,
+    Disabled = false,
+    Visible = true,
+})
+
+Groupbox:AddSlider("AimbotFOVSlider", {
+    Text = "FOV Radius",
+    Default = 100,
+    Min = 50,
+    Max = 500,
+    Rounding = 0,
+    Compact = false,
+    Tooltip = "Adjust the aim assist field of view radius",
+    Callback = function(value)
+        aimbotSettings.fovRadius = value
+        fovCircle.Radius = value
+    end,
+    Disabled = false,
+    Visible = true,
+})
+
+Groupbox:AddSlider("AimbotSmoothnessSlider", {
+    Text = "Smoothness",
+    Default = 0.3,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Tooltip = "How smoothly the aim moves (0 = instant, 1 = slow)",
+    Callback = function(value)
+        aimbotSettings.smoothness = value
+    end,
+    Disabled = false,
+    Visible = true,
+})
+
+Groupbox:AddDropdown("AimbotTargetPartDropdown", {
+    Values = {"Head", "UpperTorso", "HumanoidRootPart"},
+    Default = 1,
+    Multi = false,
+    Text = "Target Part",
+    Tooltip = "Select which body part to aim at",
+    Callback = function(value)
+        aimbotSettings.targetPart = value
+    end,
+    Disabled = false,
+    Visible = true,
+    Searchable = false,
+})
+
+Groupbox:AddToggle("AimbotTeamCheckToggle", {
+    Text = "Team Check",
+    Default = true,
+    Tooltip = "Only aim at enemies (different team)",
+    Callback = function(state)
+        aimbotSettings.teamCheck = state
+    end,
+    Disabled = false,
+    Visible = true,
+})
+
+Groupbox:AddToggle("AimbotPredictionToggle", {
+    Text = "Prediction",
+    Default = true,
+    Tooltip = "Predict target movement for better aim",
+    Callback = function(state)
+        aimbotSettings.predictionEnabled = state
+    end,
+    Disabled = false,
+    Visible = true,
+})
+
+Groupbox:AddToggle("AimbotVisibilityToggle", {
+    Text = "Visibility Check",
+    Default = true,
+    Tooltip = "Only aim at visible targets (no walls)",
+    Callback = function(state)
+        aimbotSettings.visibleCheck = state
+    end,
+    Disabled = false,
+    Visible = true,
+})
+
+Groupbox:AddToggle("AimbotRandomOffsetToggle", {
+    Text = "Random Offset (Anti-detection)",
+    Default = true,
+    Tooltip = "Adds slight aim offset to avoid detection",
+    Callback = function(state)
+        aimbotSettings.randomOffset = state
+    end,
+    Disabled = false,
+    Visible = true,
 })
 
 --  Game Detection
