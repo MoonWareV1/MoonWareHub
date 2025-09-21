@@ -23,18 +23,168 @@ local Tabs = {
     Info = Window:AddTab("Information", "info"),
     Main = Window:AddTab("Main", "user"),
     Weapons = Window:AddTab("Weapon", "shield-user"),
+    Misc = Window:AddTab("MISC", "server"),
     ["UI Settings"] = Window:AddTab("UI Settings", "settings"),
 }
 
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Movement", "person-standing")
 local RightGroupBox = Tabs.Main:AddRightGroupbox("MISC", "plus")
 local Groupbox = Tabs.Weapons:AddLeftGroupbox("AimBot", "crosshair")
+local LeftGroupBox2 = Tabs.Weapons:AddLeftGroupbox("Visuals", "view")
+local Gun = Tabs.Weapons:AddRightGroupbox("Weapons", "view")
+local Misc = Tabs.Misc:AddLeftGroupbox("More", "server")
 local Status = Tabs.Info:AddLeftGroupbox("Status", "chart-bar")
+local Update = Tabs.Info:AddRightGroupbox("Update Logs", "arrow-up-from-line")
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Humanoid = Character:WaitForChild("Humanoid")
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local Workspace = game:GetService("Workspace")
+
+--// Forced God Mode (Advanced)
+RightGroupBox:AddToggle("ForcedGodMode", {
+    Text = "Forced God Mode",
+    Default = false,
+    Tooltip = "Keeps your health at max even after death/reset",
+    Callback = function(Value)
+        local lp = game.Players.LocalPlayer
+        if Value then
+            -- Connection to force health back up
+            _G.ForceGodMode = true
+            task.spawn(function()
+                while _G.ForceGodMode and task.wait(0.1) do
+                    if lp.Character and lp.Character:FindFirstChild("Humanoid") then
+                        local hum = lp.Character.Humanoid
+                        if hum.Health < hum.MaxHealth then
+                            hum.Health = hum.MaxHealth
+                        end
+                    end
+                end
+            end)
+        else
+            _G.ForceGodMode = false
+        end
+    end,
+})
+
+-- Kill Aura Distance Slider
+RightGroupBox:AddSlider("AuraRange", {
+    Text = "Aura Range",
+    Default = 15,
+    Min = 5,
+    Max = 50,
+    Rounding = 0,
+    Tooltip = "How far the aura reaches (in studs)"
+})
+
+-- Team Check Toggle
+RightGroupBox:AddToggle("AuraTeamCheck", {
+    Text = "Ignore Teammates",
+    Default = true,
+    Tooltip = "Won't attack players on your own team"
+})
+
+-- Advanced Kill Aura Toggle
+RightGroupBox:AddToggle("Kill Aura", {
+    Text = "Advanced Kill Aura",
+    Default = false,
+    Tooltip = "Automatically melee nearby enemies",
+    Callback = function(Value)
+        if Value then
+            _G.AdvancedAura = true
+            task.spawn(function()
+                local lp = game.Players.LocalPlayer
+                local meleeEvent = game:GetService("ReplicatedStorage").meleeEvent
+
+                while _G.AdvancedAura and task.wait(0.05) do -- faster tick
+                    local myHRP = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+                    if myHRP then
+                        for _, e in pairs(game.Players:GetPlayers()) do
+                            if e ~= lp and e.Character and e.Character:FindFirstChild("HumanoidRootPart") then
+                                -- team check option
+                                if Options.AuraTeamCheck.Value and e.Team == lp.Team then
+                                    continue
+                                end
+                                local dist = (myHRP.Position - e.Character.HumanoidRootPart.Position).Magnitude
+                                if dist <= Options.AuraRange.Value then
+                                    meleeEvent:FireServer(e)
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        else
+            _G.AdvancedAura = false
+        end
+    end,
+})
+
+-- Function to detect all guns in the map
+local function getAvailableGuns()
+    local guns = {}
+    local giverFolder = workspace:FindFirstChild("Prison_ITEMS") and workspace.Prison_ITEMS:FindFirstChild("giver")
+    if giverFolder then
+        for _, gun in pairs(giverFolder:GetChildren()) do
+            if gun:IsA("Model") and gun:FindFirstChild("ITEMPICKUP") then
+                table.insert(guns, gun.Name)
+            end
+        end
+    end
+    return guns
+end
+
+-- Function to teleport to the gun, click it, and return
+local function pickupGun(gunName)
+    local giverFolder = workspace:FindFirstChild("Prison_ITEMS") and workspace.Prison_ITEMS:FindFirstChild("giver")
+    if not giverFolder then
+        warn("No gun spawners found!")
+        return
+    end
+
+    local gun = giverFolder:FindFirstChild(gunName)
+    if not gun or not gun:FindFirstChild("ITEMPICKUP") then
+        warn("Gun not found: "..gunName)
+        return
+    end
+
+    local Character = game.Players.LocalPlayer.Character or game.Players.LocalPlayer.CharacterAdded:Wait()
+    local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+    local gunPart = gun.ITEMPICKUP
+    local originalPos = HumanoidRootPart.Position
+
+    -- Teleport to gun
+    HumanoidRootPart.CFrame = CFrame.new(gunPart.Position + Vector3.new(0,3,0))
+
+    -- Fire remote to simulate click
+    local args = {gunPart}
+    workspace.Remote.ItemHandler:InvokeServer(unpack(args))
+
+    task.wait(0.2) -- short wait to avoid issues
+
+    -- Teleport back
+    HumanoidRootPart.CFrame = CFrame.new(originalPos)
+end
+
+-- Add dropdown and buttons to your existing Gun groupbox
+local GunDropdown = Gun:AddDropdown("Select Gun", getAvailableGuns(), function(selectedGun)
+    pickupGun(selectedGun)
+end)
+
+local RefreshButton = Gun:AddButton("Refresh Guns", function()
+    GunDropdown:UpdateOptions(getAvailableGuns())
+end)
+
+local PickupButton = Gun:AddButton("Pickup Selected Gun", function()
+    local selectedGun = GunDropdown.Value
+    if selectedGun then
+        pickupGun(selectedGun)
+    else
+        warn("No gun selected!")
+    end
+end)
+
 
 -- WalkSpeed Slider
 LeftGroupBox:AddSlider("WalkSpeedSlider", {
@@ -557,47 +707,60 @@ end)
 -- Initial populate
 updatePlayerDropdown()
 
--- Place Teleportation (example places, add your own)
-local placeTeleportTable = {
-    {Name = "Spawn", PlaceId = game.PlaceId},
-    {Name = "Example Place 1", PlaceId = 123456789},
-    {Name = "Example Place 2", PlaceId = 987654321},
+--// Prison Life Map Teleportation
+local Players = game:GetService("Players")
+local localPlayer = Players.LocalPlayer
+
+-- Predefined map locations
+local mapTeleportTable = {
+    {Name = "Criminal Base", CFrame = CFrame.new(-943.8, 94.1, 2064.5)},
+    {Name = "Yard", CFrame = CFrame.new(828.1, 97.9, 2462.4)},
+    {Name = "Cafeteria", CFrame = CFrame.new(919.4, 99.9, 2447.2)},
+    {Name = "Police Station", CFrame = CFrame.new(781.7, 99.9, 2292.4)},
+    {Name = "Gate Entrance", CFrame = CFrame.new(791.3, 98.9, 2186.2)},
 }
 
-local placeNames = {}
-for _, place in ipairs(placeTeleportTable) do
-    table.insert(placeNames, place.Name)
+-- Build dropdown values
+local locationNames = {}
+for _, loc in ipairs(mapTeleportTable) do
+    table.insert(locationNames, loc.Name)
 end
 
-local placeDropdown = RightGroupBox:AddDropdown("PlaceTeleportDropdown", {
-    Values = placeNames,
-    Default = placeNames[1],
-    Text = "Select Place to Teleport",
-    Tooltip = "Choose a place to teleport",
+-- Dropdown for selecting location
+local locationDropdown = RightGroupBox:AddDropdown("MapTeleportDropdown", {
+    Values = locationNames,
+    Default = locationNames[1],
+    Text = "Select Location",
+    Tooltip = "Choose where to teleport on the map",
 })
 
+-- Button to teleport
 RightGroupBox:AddButton({
-    Text = "Teleport to Place",
-    Tooltip = "Teleport to selected place",
+    Text = "Teleport to Location",
+    Tooltip = "Teleport to selected location on the map",
     Func = function()
-        local selectedPlaceName = Options.PlaceTeleportDropdown.Value
-        if not selectedPlaceName then
-            Library:Notify("No Place Selected", "Please select a place first.")
+        local selectedLocation = Options.MapTeleportDropdown.Value
+        if not selectedLocation then
+            Library:Notify("No Location Selected", "Please select a location first.")
             return
         end
 
-        for _, place in ipairs(placeTeleportTable) do
-            if place.Name == selectedPlaceName then
-                -- Teleport the player
-                local TeleportService = game:GetService("TeleportService")
-                TeleportService:Teleport(place.PlaceId, localPlayer)
+        for _, loc in ipairs(mapTeleportTable) do
+            if loc.Name == selectedLocation then
+                if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                    localPlayer.Character.HumanoidRootPart.CFrame = loc.CFrame + Vector3.new(0, 3, 0) -- small offset to prevent clipping
+                    Library:Notify("Teleported!", "Moved to "..loc.Name)
+                else
+                    Library:Notify("Teleport Failed", "Character not found.")
+                end
                 return
             end
         end
 
-        Library:Notify("Place Not Found", "The selected place was not found.")
+        Library:Notify("Location Not Found", "The selected location was not found.")
     end,
 })
+
 
 local camModsEnabled = false
 local camFOV = 70
@@ -711,239 +874,723 @@ RightGroupBox:AddToggle("LowGraphicsToggle", {
     end,
 })
 
+-- Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-
+local UserInputService = game:GetService("UserInputService")
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
---== ✅ Aimbot Settings UI (under Groupbox) ==--
+-- Your UI (unchanged exactly as you gave me)
 
--- ✅ Correctly attach the keybind to the toggle
+-- Master toggle for aimbot
 local AimbotToggle = Groupbox:AddToggle("AimbotEnabled", {
     Text = "Enable Aimbot",
     Default = false,
+    Tooltip = "First Persion for this.",
 })
 
+-- Keybind for aimbot
 local AimbotKeybind = AimbotToggle:AddKeyPicker("AimbotKeybind", {
     Text = "Aimbot Key",
-    Default = "MouseButton2",
+    Default = "F",
     Mode = "Hold",
-    SyncToggleState = true,
-    Callback = function(val)
-        AimbotToggle:SetValue(val)
-    end,
+    SyncToggleState = false,
 })
 
-
--- Silent aim toggle
-Groupbox:AddToggle("SilentAim", {
-    Text = "Enable Silent Aim",
-    Default = false,
-    Tooltip = "Redirects shots to target silently"
+-- FOV Slider
+Groupbox:AddSlider("AimbotFOV", {
+    Text = "Aimbot FOV",
+    Default = 180,
+    Min = 10,
+    Max = 720,
+    Rounding = 0,
+    Tooltip = "The field of view radius for the aimbot"
 })
 
--- FOV toggle + color
-local FOVToggle = Groupbox:AddToggle("ShowFOV", {
+-- Smoothness Slider
+Groupbox:AddSlider("AimbotSmoothness", {
+    Text = "Aimbot Smoothness",
+    Default = 10,
+    Min = 1,
+    Max = 100,
+    Rounding = 0,
+    Tooltip = "Higher = slower aim, lower = faster"
+})
+
+-- Target Bone Dropdown
+Groupbox:AddDropdown("TargetBone", {
+    Values = { "Head", "UpperTorso", "HumanoidRootPart" },
+    Default = "Head",
+    Text = "Target Bone",
+    Tooltip = "Which part of the enemy to aim at"
+})
+
+-- FOV Circle Toggle
+local ShowFOVToggle = Groupbox:AddToggle("ShowFOVCircle", {
     Text = "Show FOV Circle",
-    Default = true,
-    Tooltip = "Draws a circle around aim radius"
+    Default = false,
+    Tooltip = "Draw a circle on screen showing the aimbot field of view",
 })
-FOVToggle:AddColorPicker("FOVColor", {
+
+-- FOV Circle Color Picker
+ShowFOVToggle:AddColorPicker("FOVColor", {
+    Default = Color3.fromRGB(255, 0, 0),
     Title = "FOV Circle Color",
-    Default = Color3.fromRGB(255, 0, 0)
+    Transparency = 0,
 })
 
--- Other toggles
-Groupbox:AddToggle("TeamCheck", {
+-- Ignore teammates toggle
+Groupbox:AddToggle("IgnoreTeammates", {
     Text = "Ignore Teammates",
-    Default = true
+    Default = false,
+    Tooltip = "Avoid targeting players on your own team"
 })
 
+-- Visibility check toggle
 Groupbox:AddToggle("VisibilityCheck", {
     Text = "Visibility Check",
-    Default = true
+    Default = false,
+    Tooltip = "Only aim at targets visible from your crosshair (line-of-sight check)"
 })
 
-Groupbox:AddToggle("Prediction", {
-    Text = "Enable Prediction",
-    Default = true
-})
 
--- Dropdowns
-Groupbox:AddDropdown("TargetBone", {
-    Text = "Target Bone",
-    Values = { "Head", "Torso", "HumanoidRootPart" },
-    Default = 1
-})
+-- == Logic Code Starts Here == --
 
-Groupbox:AddDropdown("AimMode", {
-    Text = "Target Selection",
-    Values = { "ClosestToCrosshair", "ClosestDistance" },
-    Default = 1
-})
+-- Access toggles and options from UI
+local Toggles = Library.Toggles
+local Options = Library.Options
 
--- Sliders
-Groupbox:AddSlider("FOV", {
-    Text = "Aimbot FOV",
-    Min = 20,
-    Max = 300,
-    Default = 90
-})
+-- Drawing the FOV Circle
+local FOV_Circle = Drawing.new("Circle")
+FOV_Circle.Thickness = 1.5
+FOV_Circle.NumSides = 100
+FOV_Circle.Filled = false
+FOV_Circle.Transparency = 1
+FOV_Circle.ZIndex = 2
+FOV_Circle.Color = Options.FOVColor.Value or Color3.new(1, 0, 0)
+FOV_Circle.Visible = false
 
-Groupbox:AddSlider("Smoothness", {
-    Text = "Aimbot Smoothness",
-    Min = 1,
-    Max = 20,
-    Default = 6,
-    Rounding = 1
-})
-
-Groupbox:AddSlider("MaxDistance", {
-    Text = "Max Target Distance",
-    Min = 100,
-    Max = 10000,
-    Default = 1000,
-    Rounding = 0
-})
-
---== ✅ FOV Circle Drawing ==--
-
-local fovCircle = Drawing.new("Circle")
-fovCircle.Thickness = 1
-fovCircle.NumSides = 100
-fovCircle.Radius = 90
-fovCircle.Filled = false
-fovCircle.ZIndex = 2
-fovCircle.Transparency = 1
-fovCircle.Visible = false
-fovCircle.Color = Color3.fromRGB(255, 0, 0)
-
+-- Update FOV circle position and visibility every frame
 RunService.RenderStepped:Connect(function()
-    fovCircle.Visible = Options.AimbotEnabled.Value and Options.ShowFOV.Value
-    fovCircle.Color = Options.FOVColor.Value
-    fovCircle.Radius = Options.FOV.Value
-    fovCircle.Position = UserInputService:GetMouseLocation()
+    if Toggles.ShowFOVCircle.Value then
+        local mousePos = UserInputService:GetMouseLocation()
+        local adjustedPos = Vector2.new(mousePos.X, mousePos.Y - 36) -- adjust for Roblox top bar
+        FOV_Circle.Position = adjustedPos
+        FOV_Circle.Radius = Options.AimbotFOV.Value or 180
+        FOV_Circle.Color = Options.FOVColor.Value or Color3.new(1, 0, 0)
+        FOV_Circle.Visible = true
+    else
+        FOV_Circle.Visible = false
+    end
 end)
 
---== ✅ Target Finder ==--
-
-local function getCharacter(player)
-    local char = player.Character
-    if not char or not char:FindFirstChild("Humanoid") or char:FindFirstChild("Humanoid").Health <= 0 then
-        return nil
-    end
-    return char
+-- Helper: Check if position is on screen and get screen coords
+local function IsOnScreen(pos)
+    local screenPoint, onScreen = Camera:WorldToViewportPoint(pos)
+    return onScreen, Vector2.new(screenPoint.X, screenPoint.Y)
 end
 
-local function isVisible(part)
-    if not part then return false end
-    local origin = Camera.CFrame.Position
-    local direction = (part.Position - origin).Unit * 10000
+-- Get target part to aim at (head, torso, root, etc)
+local function GetTargetPart(character)
+    local bone = Options.TargetBone.Value or "Head"
+    return character:FindFirstChild(bone)
+end
+
+-- Raycast visibility check
+local function IsVisible(targetCharacter)
+    if not Toggles.VisibilityCheck.Value then
+        return true
+    end
 
     local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetCharacter}
     rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-    rayParams.FilterDescendantsInstances = { LocalPlayer.Character }
 
-    local ray = Workspace:Raycast(origin, direction, rayParams)
-    return ray and ray.Instance and ray.Instance:IsDescendantOf(part.Parent)
+    local origin = Camera.CFrame.Position
+    local direction = (targetCharacter.HumanoidRootPart.Position - origin).Unit * 500
+    local result = Workspace:Raycast(origin, direction, rayParams)
+    
+    return (not result) or result.Instance:IsDescendantOf(targetCharacter)
 end
 
-local function getTarget()
-    local bestTarget = nil
-    local bestValue = math.huge
+-- Get closest valid target inside FOV circle
+local function GetClosestTarget()
+    local maxDist = Options.AimbotFOV.Value or 180
+    local selectedTarget = nil
+    local shortestDistance = maxDist
+
+    local mousePos = UserInputService:GetMouseLocation()
+    local adjustedMousePos = Vector2.new(mousePos.X, mousePos.Y - 36)
 
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local char = getCharacter(player)
-            if char then
-                local part = char:FindFirstChild(Options.TargetBone.Value)
-                if not part then continue end
+        if player == LocalPlayer then continue end
+        if Toggles.IgnoreTeammates.Value and player.Team == LocalPlayer.Team then continue end
 
-                if Options.TeamCheck.Value and player.Team == LocalPlayer.Team then continue end
-                if Options.VisibilityCheck.Value and not isVisible(part) then continue end
+        local character = player.Character
+        if not character then continue end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not humanoid or humanoid.Health <= 0 or not rootPart then continue end
 
-                local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-                if not onScreen then continue end
+        if not IsVisible(character) then continue end
 
-                local mouse = UserInputService:GetMouseLocation()
-                local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mouse).Magnitude
-                local worldDist = (Camera.CFrame.Position - part.Position).Magnitude
+        local onScreen, screenPos = IsOnScreen(rootPart.Position)
+        if not onScreen then continue end
 
-                if worldDist > Options.MaxDistance.Value then continue end
-                if distToMouse > Options.FOV.Value then continue end
-
-                local priority = Options.AimMode.Value == "ClosestDistance" and worldDist or distToMouse
-
-                if priority < bestValue then
-                    bestValue = priority
-                    bestTarget = part
-                end
-            end
+        local distToMouse = (screenPos - adjustedMousePos).Magnitude
+        if distToMouse < shortestDistance then
+            shortestDistance = distToMouse
+            selectedTarget = character
         end
     end
 
-    return bestTarget
+    return selectedTarget
 end
 
---== ✅ Aimbot Aim Function (Legit) ==--
-
-local function aimAt(part)
-    local origin = Camera.CFrame.Position
-    local pos = part.Position
-
-    if Options.Prediction.Value and part.Parent:FindFirstChild("HumanoidRootPart") then
-        local vel = part.Parent.HumanoidRootPart.Velocity
-        local distance = (origin - pos).Magnitude
-        pos = pos + vel * (distance / 1000)
-    end
-
-    local dir = (pos - origin).Unit
-    local targetCF = CFrame.new(origin, origin + dir)
-    Camera.CFrame = Camera.CFrame:Lerp(targetCF, 1 / Options.Smoothness.Value)
+-- Smoothly aim camera at position
+local function AimAt(position, smoothness)
+    local camCF = Camera.CFrame
+    local direction = (position - camCF.Position).Unit
+    local targetCF = CFrame.new(camCF.Position, camCF.Position + direction)
+    Camera.CFrame = camCF:Lerp(targetCF, smoothness)
 end
 
---== ✅ Silent Aim Hook ==--
+-- Main Aimbot logic
+RunService.RenderStepped:Connect(function()
+    if not Toggles.AimbotEnabled.Value then return end
+    if not Options.AimbotKeybind:GetState() then return end
+    if Toggles.SilentAimOnly.Value then return end -- don't move camera in silent aim only mode
 
-getgenv().SilentTarget = nil
+    local targetChar = GetClosestTarget()
+    if not targetChar then return end
+
+    local targetPart = GetTargetPart(targetChar)
+    if not targetPart then return end
+
+    local smoothness = Options.AimbotSmoothness.Value or 10
+    AimAt(targetPart.Position, 1 / math.clamp(smoothness, 1, 100))
+end)
+
+-- Silent Aim implementation
+local CurrentSilentTarget = nil
+
+local function GetSilentAimTarget()
+    if not Toggles.EnableSilentAim.Value then return nil end
+
+    local targetChar = GetClosestTarget()
+    if not targetChar then return nil end
+
+    local part = GetTargetPart(targetChar)
+    if not part then return nil end
+
+    CurrentSilentTarget = part
+    return part.Position
+end
 
 local __namecall
 __namecall = hookmetamethod(game, "__namecall", function(self, ...)
     local method = getnamecallmethod()
-    local args = { ... }
+    local args = {...}
 
-    if method == "FindPartOnRayWithIgnoreList" and Options.SilentAim.Value and SilentTarget then
-        local origin = Camera.CFrame.Position
-        local direction = (SilentTarget.Position - origin).Unit * 1000
-        args[1] = Ray.new(origin, direction)
-        return __namecall(self, unpack(args))
+    if not checkcaller() then
+        if method == "Raycast" and typeof(self) == "Instance" and self:IsA("Workspace") then
+            local targetPos = GetSilentAimTarget()
+            if targetPos then
+                local origin = args[1]
+                local newDirection = (targetPos - origin).Unit * (args[2].Magnitude or 1000)
+                args[2] = newDirection
+                return __namecall(self, unpack(args))
+            end
+        end
     end
 
     return __namecall(self, ...)
 end)
 
---== ✅ Runtime Loop ==--
+-- Reset aimbot state on death (fix UI bug)
+local function OnCharacterAdded(character)
+    local humanoid = character:WaitForChild("Humanoid")
+    humanoid.Died:Connect(function()
+        CurrentSilentTarget = nil
+        -- Add any UI reset logic here if necessary
+    end)
+end
 
+LocalPlayer.CharacterAdded:Connect(OnCharacterAdded)
+if LocalPlayer.Character then
+    OnCharacterAdded(LocalPlayer.Character)
+end
+
+--// ESP Section
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- Toggles / flags
+local espEnabled   = false
+local showBoxes    = false
+local showTracers  = false
+local showNames    = false
+local showDistance = false
+local showHealth   = false
+
+-- Storage
+local ESPObjects = {}
+
+-- Create ESP drawings
+local function createESP(player)
+    if player == LocalPlayer or ESPObjects[player] then return end
+
+    local objects = {
+        Box      = Drawing.new("Square"),
+        Tracer   = Drawing.new("Line"),
+        Name     = Drawing.new("Text"),
+        Distance = Drawing.new("Text"),
+        Health   = Drawing.new("Text"),
+    }
+
+    -- Defaults
+    objects.Box.Color = Color3.fromRGB(0, 255, 0)
+    objects.Box.Thickness = 2
+    objects.Box.Filled = false
+    objects.Box.Transparency = 1
+    objects.Box.Visible = false
+
+    objects.Tracer.Color = Color3.fromRGB(255, 255, 0)
+    objects.Tracer.Thickness = 1
+    objects.Tracer.Transparency = 1
+    objects.Tracer.Visible = false
+
+    for _, text in ipairs({objects.Name, objects.Distance, objects.Health}) do
+        text.Size = 12
+        text.Center = true
+        text.Outline = true
+        text.Visible = false
+    end
+
+    objects.Name.Color = Color3.fromRGB(255, 255, 255)
+    objects.Distance.Color = Color3.fromRGB(200, 200, 200)
+    objects.Health.Color = Color3.fromRGB(255, 0, 0)
+
+    ESPObjects[player] = objects
+end
+
+-- Remove ESP drawings
+local function removeESP(player)
+    local obj = ESPObjects[player]
+    if obj then
+        for _, drawing in pairs(obj) do
+            drawing:Remove()
+        end
+        ESPObjects[player] = nil
+    end
+end
+
+-- Update ESP every frame
 RunService.RenderStepped:Connect(function()
-    if not Options.AimbotEnabled.Value then
-        SilentTarget = nil
-        return
-    end
+    if not espEnabled then return end
 
-    local target = getTarget()
-    SilentTarget = target
+    for player, drawings in pairs(ESPObjects) do
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local humanoid = char and char:FindFirstChildOfClass("Humanoid")
 
-    if target and Options.SilentAim.Value then
-        return -- silent aim handles it
-    end
+        if hrp and humanoid and humanoid.Health > 0 then
+            local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
 
-    if target and Options.AimbotKey.Hold and not Options.SilentAim.Value then
-        aimAt(target)
+            if onScreen then
+                -- Box size
+                local size = Vector2.new(2, 3) * (Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0)).Y - pos.Y)
+                drawings.Box.Size = size
+                drawings.Box.Position = Vector2.new(pos.X - size.X / 2, pos.Y - size.Y / 2)
+                drawings.Box.Visible = showBoxes
+
+                -- Tracer
+                drawings.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                drawings.Tracer.To = Vector2.new(pos.X, pos.Y)
+                drawings.Tracer.Visible = showTracers
+
+                -- Name
+                drawings.Name.Text = player.Name
+                drawings.Name.Position = Vector2.new(pos.X, pos.Y - size.Y / 2 - 15)
+                drawings.Name.Visible = showNames
+
+                -- Distance
+                local dist = (Camera.CFrame.Position - hrp.Position).Magnitude
+                drawings.Distance.Text = string.format("%.0f studs", dist)
+                drawings.Distance.Position = Vector2.new(pos.X, pos.Y + size.Y / 2 + 2)
+                drawings.Distance.Visible = showDistance
+
+                -- Health
+                drawings.Health.Text = "HP: " .. math.floor(humanoid.Health)
+                drawings.Health.Position = Vector2.new(pos.X, pos.Y + size.Y / 2 + 15)
+                drawings.Health.Visible = showHealth
+            else
+                for _, v in pairs(drawings) do v.Visible = false end
+            end
+        else
+            for _, v in pairs(drawings) do v.Visible = false end
+        end
     end
 end)
 
+-- Manage player ESP
+task.spawn(function()
+    while true do
+        if espEnabled then
+            for _, player in ipairs(Players:GetPlayers()) do
+                createESP(player)
+            end
+            for player in pairs(ESPObjects) do
+                if not Players:FindFirstChild(player.Name) then
+                    removeESP(player)
+                end
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+-- UI Toggles
+local ESPMasterToggle = LeftGroupBox2:AddToggle("ESPMaster", {
+    Text = "ESP Master", Default = false, Tooltip = "Enable full ESP system",
+    Callback = function(value) espEnabled = value end
+})
+
+local ESPBoxesToggle = LeftGroupBox2:AddToggle("ESPBoxes", {
+    Text = "ESP Boxes", Default = false, Tooltip = "Draw boxes around players",
+    Callback = function(value) showBoxes = value end
+})
+
+local ESPTracersToggle = LeftGroupBox2:AddToggle("ESPTracers", {
+    Text = "ESP Tracers", Default = false, Tooltip = "Draw tracer lines to players",
+    Callback = function(value) showTracers = value end
+})
+
+local ESPNamesToggle = LeftGroupBox2:AddToggle("ESPNames", {
+    Text = "ESP Name Tags", Default = false, Tooltip = "Show player names",
+    Callback = function(value) showNames = value end
+})
+
+local ESPDistanceToggle = LeftGroupBox2:AddToggle("ESPDistance", {
+    Text = "ESP Distance", Default = false, Tooltip = "Show distance to player",
+    Callback = function(value) showDistance = value end
+})
+
+local ESPHealthToggle = LeftGroupBox2:AddToggle("ESPHealth", {
+    Text = "ESP Health", Default = false, Tooltip = "Show player HP",
+    Callback = function(value) showHealth = value end
+})
+
+-- Color Pickers
+local ESPBoxColorPicker = ESPBoxesToggle:AddColorPicker("ESPBoxColor", {
+    Default = Color3.fromRGB(0, 255, 0), Title = "Box Color", Transparency = 0,
+    Callback = function(color) for _, obj in pairs(ESPObjects) do obj.Box.Color = color end end
+})
+
+local ESPTracerColorPicker = ESPTracersToggle:AddColorPicker("ESPTracerColor", {
+    Default = Color3.fromRGB(255, 255, 0), Title = "Tracer Color", Transparency = 0,
+    Callback = function(color) for _, obj in pairs(ESPObjects) do obj.Tracer.Color = color end end
+})
+
+local ESPNameColorPicker = ESPNamesToggle:AddColorPicker("ESPNameColor", {
+    Default = Color3.fromRGB(255, 255, 255), Title = "Name Color", Transparency = 0,
+    Callback = function(color) for _, obj in pairs(ESPObjects) do obj.Name.Color = color end end
+})
+
+local ESPHealthColorPicker = ESPHealthToggle:AddColorPicker("ESPHealthColor", {
+    Default = Color3.fromRGB(255, 0, 0), Title = "Health Color", Transparency = 0,
+    Callback = function(color) for _, obj in pairs(ESPObjects) do obj.Health.Color = color end end
+})
+
+local ESPDistanceColorPicker = ESPDistanceToggle:AddColorPicker("ESPDistanceColor", {
+    Default = Color3.fromRGB(200, 200, 200), Title = "Distance Color", Transparency = 0,
+    Callback = function(color) for _, obj in pairs(ESPObjects) do obj.Distance.Color = color end end
+})
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+--// Gun Mods Config
+local gunMods = {
+    InfiniteAmmo   = false,
+    RapidFire      = false,
+    NoRecoil       = false,
+    FireRate       = 0.05,
+
+    InstantReload  = false,
+    NoSpread       = false,
+    InfiniteRange  = false,
+    DamageBoost    = false,
+    DamageValue    = 100,
+    ForceAuto      = false,
+
+    MultiShot      = false,
+    BulletCount    = 5,
+
+    RandomSpread   = false,
+    SpreadAmount   = 5,
+}
+
+--// Hook cache (so we don’t double-hook)
+local hookedGuns = {}
+
+local function patchInfiniteAmmo(v)
+    if hookedGuns[v] then return end
+    if typeof(v.Fire) == "function" then
+        local old
+        old = hookfunction(v.Fire, function(self, ...)
+            if gunMods.InfiniteAmmo then
+                self.CurrentAmmo = math.huge
+                self.StoredAmmo = math.huge
+            end
+            return old(self, ...)
+        end)
+        hookedGuns[v] = true
+    end
+end
+
+--// Patcher Function
+local function patchGuns()
+    for _, v in pairs(getgc(true)) do
+        if type(v) == "table" and rawget(v, "MaxAmmo") and rawget(v, "CurrentAmmo") then
+
+            -- Infinite Ammo (hooked into Fire)
+            if gunMods.InfiniteAmmo then
+                v.MaxAmmo = math.huge
+                patchInfiniteAmmo(v)
+            end
+
+            -- Rapid Fire
+            if gunMods.RapidFire then
+                v.FireRate = gunMods.FireRate
+            end
+
+            -- No Recoil
+            if gunMods.NoRecoil then
+                v.Recoil = 0
+                v.CameraShake = 0
+            end
+
+            -- Instant Reload
+            if gunMods.InstantReload then
+                v.ReloadTime = 0.01
+            end
+
+            -- No Spread
+            if gunMods.NoSpread then
+                v.BulletSpread = 0
+            end
+
+            -- Infinite Range
+            if gunMods.InfiniteRange then
+                v.Range = math.huge
+            end
+
+            -- Damage Boost
+            if gunMods.DamageBoost then
+                v.Damage = gunMods.DamageValue
+            end
+
+            -- Force Auto
+            if gunMods.ForceAuto then
+                v.Auto = true
+            end
+
+            -- Multi-Shot
+            if gunMods.MultiShot then
+                v.Bullets = gunMods.BulletCount
+            end
+
+            -- Random Spread (only with MultiShot)
+            if gunMods.RandomSpread and gunMods.MultiShot then
+                v.BulletSpread = gunMods.SpreadAmount
+            end
+        end
+    end
+end
+
+--// Heartbeat Update
+task.spawn(function()
+    while task.wait(0.25) do
+        pcall(patchGuns)
+    end
+end)
+
+--// UI Setup
+Gun:AddToggle("InfiniteAmmo", {
+    Text = "Infinite Ammo",
+    Default = false,
+    Callback = function(v) gunMods.InfiniteAmmo = v end,
+})
+
+Gun:AddToggle("RapidFire", {
+    Text = "Rapid Fire",
+    Default = false,
+    Callback = function(v) gunMods.RapidFire = v end,
+})
+
+Gun:AddSlider("FireRate", {
+    Text = "Fire Rate",
+    Default = 0.05,
+    Min = 0.01,
+    Max = 0.2,
+    Rounding = 3,
+    Callback = function(v) gunMods.FireRate = v end,
+})
+
+Gun:AddToggle("NoRecoil", {
+    Text = "No Recoil",
+    Default = false,
+    Callback = function(v) gunMods.NoRecoil = v end,
+})
+
+Gun:AddToggle("InstantReload", {
+    Text = "Instant Reload",
+    Default = false,
+    Callback = function(v) gunMods.InstantReload = v end,
+})
+
+Gun:AddToggle("NoSpread", {
+    Text = "No Spread",
+    Default = false,
+    Callback = function(v) gunMods.NoSpread = v end,
+})
+
+Gun:AddToggle("InfiniteRange", {
+    Text = "Infinite Range",
+    Default = false,
+    Callback = function(v) gunMods.InfiniteRange = v end,
+})
+
+Gun:AddToggle("DamageBoost", {
+    Text = "Damage Boost",
+    Default = false,
+    Callback = function(v) gunMods.DamageBoost = v end,
+})
+
+Gun:AddSlider("DamageValue", {
+    Text = "Damage",
+    Default = 100,
+    Min = 25,
+    Max = 500,
+    Rounding = 0,
+    Callback = function(v) gunMods.DamageValue = v end,
+})
+
+Gun:AddToggle("ForceAuto", {
+    Text = "Force Auto",
+    Default = false,
+    Callback = function(v) gunMods.ForceAuto = v end,
+})
+
+Gun:AddToggle("MultiShot", {
+    Text = "Multi-Shot",
+    Default = false,
+    Callback = function(v) gunMods.MultiShot = v end,
+})
+
+Gun:AddSlider("BulletCount", {
+    Text = "Bullet Count",
+    Default = 5,
+    Min = 2,
+    Max = 50,
+    Rounding = 0,
+    Callback = function(v) gunMods.BulletCount = v end,
+})
+
+Gun:AddToggle("RandomSpread", {
+    Text = "Random Spread",
+    Default = false,
+    Callback = function(v) gunMods.RandomSpread = v end,
+})
+
+Gun:AddSlider("SpreadAmount", {
+    Text = "Spread Amount",
+    Default = 5,
+    Min = 0,
+    Max = 50,
+    Rounding = 0,
+    Callback = function(v) gunMods.SpreadAmount = v end,
+})
+
+--// Server Hop
+Misc:AddButton({
+    Text = "Server Hop",
+    Tooltip = "Join a random new server",
+    Func = function()
+        local Http = game:GetService("HttpService")
+        local TP = game:GetService("TeleportService")
+        local servers = {}
+        local req = syn and syn.request or http and http.request or http_request or request
+        local response = req({
+            Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100", game.PlaceId),
+            Method = "GET"
+        })
+        local data = Http:JSONDecode(response.Body)
+        for _, v in pairs(data.data) do
+            if v.playing < v.maxPlayers and v.id ~= game.JobId then
+                table.insert(servers, v.id)
+            end
+        end
+        if #servers > 0 then
+            TP:TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)], game.Players.LocalPlayer)
+        else
+            Library:Notify("No servers found", "Could not find another server to hop to.")
+        end
+    end,
+})
+
+--// Rejoin
+Misc:AddButton({
+    Text = "Rejoin Server",
+    Tooltip = "Rejoin the same server",
+    Func = function()
+        game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, game.Players.LocalPlayer)
+    end,
+})
+
+--// Low Player Server
+Misc:AddButton({
+    Text = "Low Player Server",
+    Tooltip = "Find a server with the fewest players",
+    Func = function()
+        local Http = game:GetService("HttpService")
+        local TP = game:GetService("TeleportService")
+        local req = syn and syn.request or http and http.request or http_request or request
+        local response = req({
+            Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100", game.PlaceId),
+            Method = "GET"
+        })
+        local data = Http:JSONDecode(response.Body)
+        local lowestServer = nil
+        local lowestCount = math.huge
+        for _, v in pairs(data.data) do
+            if v.playing < lowestCount and v.id ~= game.JobId then
+                lowestCount = v.playing
+                lowestServer = v.id
+            end
+        end
+        if lowestServer then
+            TP:TeleportToPlaceInstance(game.PlaceId, lowestServer, game.Players.LocalPlayer)
+        else
+            Library:Notify("No servers found", "Could not find a low player server.")
+        end
+    end,
+})
+
+--// Reset Character
+Misc:AddButton({
+    Text = "Reset Character",
+    Tooltip = "Respawn without using Roblox menu",
+    Func = function()
+        local lp = game.Players.LocalPlayer
+        lp.Character:BreakJoints()
+    end,
+})
 
 --  Game Detection
 local GameList = {
@@ -964,143 +1611,6 @@ local detectionStatus = gameInfo.Detected and "✅ Detected" or "❌ Undetected"
 local gameNameLabel = Status:AddLabel("Game Name: " .. gameInfo.Name)
 local detectionStatusLabel = Status:AddLabel("Detection Status: " .. detectionStatus)
 
-Status:AddToggle("ShowMinimalOverlay", {
-    Text = "Show INFO",
-    Default = false,
-    Tooltip = "Toggle minimal performance overlay",
-    Callback = function(value)
-        if value then
-            StartMinimalOverlay()
-        else
-            StopMinimalOverlay()
-        end
-    end
-})
-
-local UserInputService = game:GetService("UserInputService")
-
-local overlayGui = Instance.new("ScreenGui")
-overlayGui.Name = "PingFPSOverlay"
-overlayGui.IgnoreGuiInset = true
-overlayGui.ResetOnSpawn = false
-overlayGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-overlayGui.Parent = game:FindFirstChildOfClass("CoreGui")
-
-local fpsPingLabel = Instance.new("TextLabel")
-fpsPingLabel.Name = "FPSPingDisplay"
-fpsPingLabel.Position = UDim2.new(0.5, -75, 0, 5) -- Center top
-fpsPingLabel.Size = UDim2.new(0, 150, 0, 25)
-fpsPingLabel.BackgroundTransparency = 0.3
-fpsPingLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-fpsPingLabel.BorderSizePixel = 0
-fpsPingLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-fpsPingLabel.Font = Enum.Font.SourceSansBold
-fpsPingLabel.TextSize = 14
-fpsPingLabel.TextStrokeTransparency = 0.8
-fpsPingLabel.TextXAlignment = Enum.TextXAlignment.Center
-fpsPingLabel.Visible = false
-fpsPingLabel.Parent = overlayGui
-
--- Drag functionality
-local dragging = false
-local dragInput, dragStart, startPos
-
-local function updatePosition(input)
-    local delta = input.Position - dragStart
-    fpsPingLabel.Position = UDim2.new(
-        startPos.X.Scale,
-        startPos.X.Offset + delta.X,
-        startPos.Y.Scale,
-        startPos.Y.Offset + delta.Y
-    )
-end
-
-fpsPingLabel.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = fpsPingLabel.Position
-
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
-    end
-end)
-
-fpsPingLabel.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        dragInput = input
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        updatePosition(input)
-    end
-end)
-
--- Color helper: linear interpolation between green and red
-local function lerpColor(color1, color2, t)
-    return Color3.new(
-        color1.R + (color2.R - color1.R) * t,
-        color1.G + (color2.G - color1.G) * t,
-        color1.B + (color2.B - color1.B) * t
-    )
-end
-
-local runningOverlay = false
-
-function StartMinimalOverlay()
-    runningOverlay = true
-    fpsPingLabel.Visible = true
-
-    task.spawn(function()
-        local lastTime = tick()
-        local frameCount = 0
-        local fps = 0
-
-        while runningOverlay and not Library.Unloaded do
-            frameCount = frameCount + 1
-            local currentTime = tick()
-            local delta = currentTime - lastTime
-
-            if delta >= 1 then  -- update FPS every second
-                fps = frameCount / delta
-                frameCount = 0
-                lastTime = currentTime
-            end
-
-            local ping = 999
-            local perfStats = Stats:FindFirstChild("PerformanceStats")
-            if perfStats and perfStats:FindFirstChild("Ping") then
-                ping = perfStats.Ping:GetValue()
-            end
-
-            -- Color coding
-            local fpsT = math.clamp((fps - 15) / (60 - 15), 0, 1)
-            local fpsColor = lerpColor(Color3.fromRGB(255, 0, 0), Color3.fromRGB(0, 255, 0), fpsT)
-
-            local pingT = 1 - math.clamp((ping - 50) / (250 - 50), 0, 1)
-            local pingColor = lerpColor(Color3.fromRGB(255, 0, 0), Color3.fromRGB(0, 255, 0), pingT)
-
-            local overallT = math.min(fpsT, pingT)
-            local overallColor = lerpColor(Color3.fromRGB(255, 0, 0), Color3.fromRGB(0, 255, 0), overallT)
-
-            fpsPingLabel.Text = string.format("FPS: %d | Ping: %dms", math.floor(fps), ping)
-            fpsPingLabel.TextColor3 = overallColor
-
-            task.wait(0.1) -- update 10 times a second for smoother updates
-        end
-    end)
-end
-
-
-function StopMinimalOverlay()
-    runningOverlay = false
-    fpsPingLabel.Visible = false
-end
 
 Status:AddButton({
     Text = "Join Our Discord",
@@ -1115,6 +1625,34 @@ Status:AddButton({
     Tooltip = "Click to copy Discord invite link",
 })
 
+local Label = Update:AddLabel("UPDATE LOGS")
+local WrappedLabel = Update:AddLabel({
+    Text = "Added Full Aimbot system.",
+    DoesWrap = false
+})
+
+-- Sets the watermark visibility
+Library:SetWatermarkVisibility(true)
+
+-- Example of dynamically-updating watermark with common traits (fps and ping)
+local FrameTimer = tick()
+local FrameCounter = 0;
+local FPS = 60;
+
+local WatermarkConnection = game:GetService('RunService').RenderStepped:Connect(function()
+    FrameCounter += 1;
+
+    if (tick() - FrameTimer) >= 1 then
+        FPS = FrameCounter;
+        FrameTimer = tick();
+        FrameCounter = 0;
+    end;
+
+    Library:SetWatermark(('MoonWare🌑 | %s fps | %s ms'):format(
+        math.floor(FPS),
+        math.floor(game:GetService('Stats').Network.ServerStatsItem['Data Ping']:GetValue())
+    ));
+end);
 
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
 
@@ -1136,7 +1674,7 @@ MenuGroup:AddToggle("ShowCustomCursor", {
 
 MenuGroup:AddDropdown("NotificationSide", {
     Values = { "Left", "Right" },
-    Default = "Right",
+    Default = "Left",
     Text = "Notification Side",
     Callback = function(Value)
         Library:SetNotifySide(Value)
